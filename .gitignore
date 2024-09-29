@@ -56,3 +56,7 @@ target-out-docker
 
 
 wallet.md
+
+
+node_modules/
+.env
