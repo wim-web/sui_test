@@ -1,7 +1,7 @@
 import { getFaucetHost, requestSuiFromFaucetV0 } from '@mysten/sui/faucet';
 import { config } from 'dotenv'
 import { Transaction } from '@mysten/sui/transactions';
-import { SuiClient } from '@mysten/sui/client';
+import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 
 
@@ -51,7 +51,7 @@ async function executeTransaction(address: string, private_key: string) {
     tx.setGasBudget(20000000);
 
     const client = new SuiClient({
-        url: "https://fullnode.testnet.sui.io:443"
+        url: getFullnodeUrl('testnet')
     });
 
     const keypair = Ed25519Keypair.fromSecretKey(private_key);
