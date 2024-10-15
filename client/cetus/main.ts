@@ -1,4 +1,4 @@
-import { local } from "./preswap"
+import { local, pre } from "./preswap"
 
 /**
  * @doc https://cetus-1.gitbook.io/cetus-developer-docs/developer/via-sdk/features-available
@@ -7,6 +7,8 @@ import { local } from "./preswap"
 async function main() {
 
     await local()
+
+    await pre()
 }
 
 
