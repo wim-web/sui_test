@@ -5,7 +5,7 @@ import { config } from "dotenv"
 import { setTimeout } from "timers/promises"
 
 const client = new SuiClient({ url: getFullnodeUrl('testnet') })
-const package_id = "0x08d5b85b4b72c14c7cad2c94683b7a66b555c2f05f2c6b8ea191bf9331301c27" as const
+const package_id = "0x468678d9c30c988a5b35bccaeaccf2feabfb30a3d0e6f36bad37a984e9d61414" as const
 
 function getSigner(private_key: string): Ed25519Keypair {
     if (private_key === "") {
@@ -13,6 +13,49 @@ function getSigner(private_key: string): Ed25519Keypair {
     }
 
     return Ed25519Keypair.fromSecretKey(private_key)
+}
+
+async function row_fake_coin(amount: number, signer: Ed25519Keypair): Promise<{
+    fake_coin: {
+        id: string
+    }
+}> {
+    const tx = new Transaction()
+
+    const fake_coin = tx.moveCall({
+        package: package_id,
+        module: "paon",
+        function: "fake_coin",
+        arguments: [
+            tx.pure.u8(amount)
+        ]
+    })
+
+    tx.transferObjects([fake_coin], tx.pure.address(signer.getPublicKey().toSuiAddress()))
+
+    const result = await client.signAndExecuteTransaction({
+        signer, transaction: tx, options: {
+            showObjectChanges: true,
+        }
+    })
+
+    if (result.objectChanges == undefined) {
+        throw new Error("lock and key yeah!");
+    }
+
+    return result.objectChanges
+        .filter((object) => object.type === 'created')
+        .reduce((pre, cur) => {
+            if (cur.objectType.includes("Fake")) {
+                pre.fake_coin.id = cur.objectId
+                return pre
+            }
+            return pre
+        }, {
+            fake_coin: {
+                id: ""
+            }
+        })
 }
 
 async function lock_and_key(amount: number, signer: Ed25519Keypair): Promise<{
@@ -68,102 +111,84 @@ async function lock_and_key(amount: number, signer: Ed25519Keypair): Promise<{
         })
 }
 
-async function create_escrow(
-    key_id: string, locked_id, exchange_id: string,
-    signer: Ed25519Keypair, recipient: Ed25519Keypair, custodian: Ed25519Keypair,
+async function create_share_escrow(
+    locked_id, exchange_id: string,
+    signer: Ed25519Keypair, recipient: Ed25519Keypair
 ) {
     const tx = new Transaction()
 
     tx.moveCall({
         package: package_id,
-        module: "own",
+        module: "share",
         function: "create",
         typeArguments: [
             `${package_id}::paon::FakeCoin`
         ],
         arguments: [
-            tx.object(key_id),
             tx.object(locked_id),
             tx.object(exchange_id),
             tx.pure.address(recipient.getPublicKey().toSuiAddress()),
-            tx.pure.address(custodian.getPublicKey().toSuiAddress()),
         ]
     })
 
     const result = await client.signAndExecuteTransaction({
         signer, transaction: tx, options: {
-            showObjectChanges: true
+            showEffects: true
         }
     })
 
-    if (result.objectChanges == undefined) {
-        throw new Error("escrow is escrow");
+    const escrow_id = result?.effects?.created?.[0]?.reference?.objectId;
+
+    if (escrow_id == null) {
+        throw new Error("dont get escrow");
     }
 
-    const escrow = result.objectChanges.find((object) => object.type === "created")
-
-    if (escrow == null || !escrow.objectType.includes("Escrow")) {
-        throw new Error("escrow is escrow");
-    }
-
-    return escrow.objectId
+    return escrow_id
 }
 
 async function main() {
     config()
 
-
     const mike_signer = getSigner(process.env.PRIVATE_KEY || "")
     const bob_signer = getSigner(process.env.PRIVATE_KEY2 || "")
 
-    const mike_lock_and_key = await lock_and_key(3, mike_signer)
-    const bob_lock_and_key = await lock_and_key(255, bob_signer)
+    const mike_lock_and_key = await lock_and_key(9, mike_signer)
+    const bob_fake_coin = await row_fake_coin(88, bob_signer)
 
     console.log({ mike_lock_and_key })
-    console.log({ bob_lock_and_key })
+    console.log({ bob_fake_coin })
 
     console.log("lock and key")
-    await setTimeout(1000 * 3)
+    await setTimeout(1000 * 5)
 
-    const mike_escrow_id = await create_escrow(
-        mike_lock_and_key.object_key.id,
-        mike_lock_and_key.object_locked.id,
-        bob_lock_and_key.object_key.id,
-        mike_signer,
-        bob_signer,
-        mike_signer
-    )
-
-    const bob_escrow_id = await create_escrow(
-        bob_lock_and_key.object_key.id,
-        bob_lock_and_key.object_locked.id,
+    const escrow_id = await create_share_escrow(
+        bob_fake_coin.fake_coin.id,
         mike_lock_and_key.object_key.id,
         bob_signer,
         mike_signer,
-        mike_signer
     )
 
-    console.log({ mike_escrow_id })
-    console.log({ bob_escrow_id })
-
-    console.log("escrow")
-    await setTimeout(1000 * 3)
+    console.log({ escrow_id })
+    await setTimeout(1000 * 5)
 
     const tx = new Transaction()
 
-    tx.moveCall({
+    const ob = tx.moveCall({
         package: package_id,
-        module: "own",
+        module: "share",
         function: "swap",
         typeArguments: [
             `${package_id}::paon::FakeCoin`,
             `${package_id}::paon::FakeCoin`,
         ],
         arguments: [
-            tx.object(mike_escrow_id),
-            tx.object(bob_escrow_id)
+            tx.object(escrow_id),
+            tx.object(mike_lock_and_key.object_key.id),
+            tx.object(mike_lock_and_key.object_locked.id)
         ]
     })
+
+    tx.transferObjects([ob], tx.pure.address(mike_signer.getPublicKey().toSuiAddress()))
 
     const result = await client.signAndExecuteTransaction({ signer: mike_signer, transaction: tx })
 

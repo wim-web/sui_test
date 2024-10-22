@@ -138,6 +138,12 @@ module simpleeee::paon {
         lock(fc, ctx)
     }
     
+    public fun fake_coin(amount: u8, ctx: &mut TxContext): (FakeCoin) {
+        let fc = FakeCoin {id: object::new(ctx), amount};
+                
+        fc
+    }
+    
     public fun lock<T: store>(obj: T, ctx: &mut TxContext): (Locked<T>, Key) {
         let key = Key { id: object::new(ctx) };
         let lock = Locked {
@@ -161,3 +167,122 @@ module simpleeee::paon {
 }
 
 
+module simpleeee::share {
+    use sui::{
+        event,
+        dynamic_object_field::{Self as dof}
+    };
+    
+    use simpleeee::paon::{Locked, Key};
+    
+    public struct EscrowedObjectKey has copy, store, drop {}
+    
+    public struct Escrow<phantom T: key + store> has key, store {
+        id: UID,
+        sender: address,
+        recipient: address,
+        exchange_key: ID,
+    }
+    
+    public struct EscrowCreated has copy, drop {
+        /// the ID of the escrow that was created
+        escrow_id: ID,
+        /// The ID of the `Key` that unlocks the requested object.
+        key_id: ID,
+        /// The id of the sender who'll receive `T` upon swap
+        sender: address,
+        /// The (original) recipient of the escrowed object
+        recipient: address,
+        /// The ID of the escrowed item
+        item_id: ID,
+    }
+    
+    public struct EscrowSwapped has copy, drop {
+        escrow_id: ID
+    }
+
+    public struct EscrowCancelled has copy, drop {
+        escrow_id: ID
+    }
+    
+    const EMismatchedSenderRecipient: u64 = 0;
+    const EMismatchedExchangeObject: u64 = 1;
+    
+    public fun create<T: key + store>(
+        escrowed: T,
+        exchange_key: ID,
+        recipient: address,
+        ctx: &mut TxContext,
+    ) {
+        let mut escrow = Escrow<T> {
+            id: object::new(ctx),
+            sender: ctx.sender(),
+            recipient,
+            exchange_key
+        };
+        
+        event::emit(EscrowCreated {
+            escrow_id: object::id(&escrow),
+            key_id: exchange_key,
+            sender: escrow.sender,
+            recipient,
+            item_id: object::id(&escrowed),
+        });
+        
+        dof::add(&mut escrow.id, EscrowedObjectKey {}, escrowed);
+        
+        transfer::public_share_object(escrow);
+    }
+    
+    public fun swap<T: key + store, U: key + store>(
+        mut escrow: Escrow<T>,
+        key: Key,
+        locked: Locked<U>,
+        ctx: &TxContext,
+    ): T {
+        let escrowed = dof::remove<EscrowedObjectKey, T>(&mut escrow.id, EscrowedObjectKey {});
+        
+        let Escrow {
+            id,
+            sender,
+            recipient,
+            exchange_key,
+        } = escrow;
+        
+        assert!(recipient == ctx.sender(), EMismatchedSenderRecipient);
+        assert!(exchange_key == object::id(&key), EMismatchedExchangeObject);
+        
+        transfer::public_transfer(locked.unlock(key), sender);
+        
+        event::emit(EscrowSwapped {
+                escrow_id: id.to_inner(),
+        });
+        
+        id.delete();
+        
+        escrowed
+    }
+    
+    public fun return_to_sender<T: key + store>(
+            mut escrow: Escrow<T>,
+            ctx: &TxContext
+    ): T {
+
+            event::emit(EscrowCancelled {
+                    escrow_id: object::id(&escrow)
+            });
+
+            let escrowed = dof::remove<EscrowedObjectKey, T>(&mut escrow.id, EscrowedObjectKey {});
+
+            let Escrow {
+                    id,
+                    sender,
+                    recipient: _,
+                    exchange_key: _,
+            } = escrow;
+
+            assert!(sender == ctx.sender(), EMismatchedSenderRecipient);
+            id.delete();
+            escrowed
+    }
+}
